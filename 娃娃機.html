@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>夾娃娃機遊戲</title>
+    <style>
+        body {
+            text-align: center;
+            font-family: Arial, sans-serif;
+            background-color: #f0f0f0;
+        }
+
+        h1 {
+            margin: 20px 0;
+            color: #333;
+        }
+
+        canvas {
+            border: 1px solid #000;
+            background-color: #fff;
+            margin-bottom: 20px;
+        }
+
+        #controls {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        #confirmButton, #dropButton {
+            padding: 10px 20px;
+            font-size: 16px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+        }
+
+        #confirmButton {
+            background-color: #4CAF50;
+            color: white;
+            display: none; /* 初始隱藏 */
+        }
+
+        #dropButton {
+            background-color: #f44336;
+            color: white;
+        }
+
+        #joystick {
+            width: 100px;
+            height: 100px;
+            border: 2px solid #000;
+            border-radius: 50%;
+            background-color: #ccc;
+            touch-action: none;
+            position: relative;
+        }
+
+        #stick {
+            position: absolute;
+            left: 50%;
+            top: 50%;
+            width: 40px;
+            height: 40px;
+            margin-left: -20px;
+            margin-top: -20px;
+            border-radius: 50%;
+            background-color: #666;
+        }
+
+        #passwordPrompt {
+            display: none;
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: white;
+            padding: 20px;
+            border: 1px solid #000;
+            border-radius: 5px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.5);
+        }
+
+        #passwordPrompt input {
+            padding: 10px;
+            font-size: 16px;
+        }
+
+        #passwordPrompt button {
+            margin-top: 10px;
+            padding: 10px 20px;
+            font-size: 16px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            background-color: #4CAF50;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <h1>夾娃娃機遊戲</h1>
+    <canvas id="gameCanvas" width="600" height="400"></canvas>
+    <div id="controls">
+        <button id="dropButton">下爪</button>
+        <div id="joystick">
+            <div id="stick"></div>
+        </div>
+    </div>
+    <button id="confirmButton">確認</button>
+    <div id="passwordPrompt">
+        <input type="password" id="passwordInput" placeholder="輸入密碼">
+        <button id="passwordSubmit">確定</button>
+    </div>
+    <script>
+        const canvas = document.getElementById("gameCanvas");
+        const ctx = canvas.getContext("2d");
+
+        const clawOpenImg = new Image();
+        clawOpenImg.src = "open.PNG"; // 開口的爪子圖片
+        const clawClosedImg = new Image();
+        clawClosedImg.src = "close.PNG"; // 閉合的爪子圖片
+
+        const clawWidth = 50;
+        const clawHeight = 50;
+        let clawX = 0; // 初始位置
+        let clawY = 0;
+        let isHoldingToy = false;
+        let heldToy = null;
+        let isReturning = false;
+        let isDropping = false;
+        let canDoubleGrab = false; // 是否允許二收
+        let doubleGrabCount = 0; // 二收計數器
+        let isAscending = false; // 確保上升至最高處
+        let isClawMovingDown = false;
+
+        const toyWidth = 30;
+        const toyHeight = 30;
+        const toys = [];
+
+        for (let i = 0; i < 10; i++) {
+            const x = Math.random() * (canvas.width - toyWidth);
+            const y = canvas.height - toyHeight - 50; // 確保物品在底部，並且不在洞口位置
+            toys.push({ x, y, isCaught: false });
+        }
+
+        const confirmButton = document.getElementById("confirmButton");
+        const dropButton = document.getElementById("dropButton");
+        const passwordPrompt = document.getElementById("passwordPrompt");
+        const passwordInput = document.getElementById("passwordInput");
+        const passwordSubmit = document.getElementById("passwordSubmit");
+
+        function drawClaw() {
+            if (isHoldingToy || isReturning) {
+                ctx.drawImage(clawClosedImg, clawX, clawY, clawWidth, clawHeight);
+            } else {
+                ctx.drawImage(clawOpenImg, clawX, clawY, clawWidth, clawHeight);
+            }
+        }
+
+        function drawToys() {
+            ctx.fillStyle = "pink";
+            toys.forEach(toy => {
+                ctx.fillRect(toy.x, toy.y, toyWidth, toyHeight);
+            });
+        }
+
+        function drawClawLine() {
+            ctx.strokeStyle = "#000";
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(clawX + clawWidth / 2, 0);
+            ctx.lineTo(clawX + clawWidth / 2, clawY);
+            ctx.stroke();
+        }
+
+        function updateClawPosition() {
+            if (isClawMovingDown) {
+                clawY += 2;
+                if (clawY + clawHeight >= canvas.height || toys.some(toy => clawY + clawHeight >= toy.y && clawX < toy.x + toyWidth && clawX + clawWidth > toy.x)) {
+                    clawY = Math.min(clawY, canvas.height - clawHeight);
+                    isClawMovingDown = false;
+
+                    let toyCaught = false;
+
+                    // 確保碰到物品就會夾起來
+                    toys.forEach(toy => {
+                        if (clawY + clawHeight >= toy.y && clawX < toy.x + toyWidth && clawX + clawWidth > toy.x && !toy.isCaught) {
+                            toy.isCaught = true;
+                            heldToy = toy;
+                            isHoldingToy = true;
+                            toyCaught = true;
+                        }
+                    });
+
+                    if (isHoldingToy) {
+                        heldToy.y = clawY + clawHeight;
+                        isAscending = true;
+                        setTimeout(() => {
+                            confirmButton.style.display = 'block'; // 顯示確認按鈕
+                        }, 500);
+                    } else {
+                        // 如果沒抓到，物品會被原地丟下
+                        setTimeout(() => {
+                            isReturning = true;
+                            isClawMovingDown = false; // 停止下爪
+                        }, 500);
+                    }
+
+                    // 不論是否成功，五秒內按下才允許二收
+                    if (toyCaught) {
+                        setTimeout(() => {
+                            canDoubleGrab = true;
+                        }, 5000);
+                    }
+                }
+            } else if (isAscending) {
+                clawY -= 2;
+                if (clawY <= 0) {
+                    clawY = 0;
+                    isAscending = false;
+                    isReturning = true;
+                    setTimeout(() => {
+                        // 等待爪子完全停止三秒後
+                        if (heldToy) {
+                            // 如果抓到物品，顯示確認按鈕
+                            confirmButton.style.display = 'block';
+                        }
+                    }, 3000);
+                }
+            } else if (isReturning) {
+                // 緩慢移動到最左邊
+                if (clawX > 0) {
+                    clawX -= 2;
+                } else {
+                    clawX = 0;
+                }
+
+                if (clawX === 0) {
+                    if (heldToy) {
+                        heldToy.x = clawX + clawWidth / 2 - toyWidth / 2;
+                        heldToy.y = clawY + clawHeight;
+                    }
+                    isReturning = false;
+                    isDropping = false;
+                    confirmButton.style.display = 'none'; // 確保在返回後隱藏確認按鈕
+                    canDoubleGrab = false;
+                    doubleGrabCount = 0;
+                }
+            }
+
+            if (isHoldingToy) {
+                heldToy.x = clawX + clawWidth / 2 - toyWidth / 2;
+                heldToy.y = clawY + clawHeight;
+            }
+        }
+
+        function gameLoop() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            drawToys(); // 確保物品在底部，不被爪子遮擋
+            drawClaw();
+            drawClawLine();
+            updateClawPosition();
+            requestAnimationFrame(gameLoop);
+        }
+
+        document.addEventListener("keydown", (event) => {
+            if (event.key === "ArrowDown") {
+                if (!isClawMovingDown && !isReturning && !isAscending) {
+                    isClawMovingDown = true;
+                    isDropping = true;
+                    confirmButton.style.display = 'none';
+                    canDoubleGrab = false; // 每次下爪都禁用二收功能
+                    doubleGrabCount = 0; // 重置二收計數器
+                }
+            } else if (event.key === "ArrowUp") {
+                // 二收功能按下後爪子上升
+                if (canDoubleGrab && doubleGrabCount < 2) {
+                    doubleGrabCount++;
+                    isClawMovingDown = false;
+                    isAscending = true;
+                    canDoubleGrab = false; // 二收後禁用
+                }
+            }
+        });
+
+        // Joystick control
+        const joystick = document.getElementById("joystick");
+        const stick = document.getElementById("stick");
+        let isDragging = false;
+
+        joystick.addEventListener("mousedown", startDrag);
+        joystick.addEventListener("touchstart", startDrag);
+
+        function startDrag(event) {
+            isDragging = true;
+            document.addEventListener("mousemove", onDrag);
+            document.addEventListener("touchmove", onDrag);
+            document.addEventListener("mouseup", endDrag);
+            document.addEventListener("touchend", endDrag);
+        }
+
+        function onDrag(event) {
+            if (!isDragging) return;
+            const rect = joystick.getBoundingClientRect();
+            const x = (event.touches ? event.touches[0].clientX : event.clientX) - rect.left - rect.width / 2;
+            const y = (event.touches ? event.touches[0].clientY : event.clientY) - rect.top - rect.height / 2;
+            const angle = Math.atan2(y, x);
+            const distance = Math.min(50, Math.sqrt(x * x + y * y));
+            stick.style.transform = `translate(${distance * Math.cos(angle)}px, ${distance * Math.sin(angle)}px)`;
+
+            // Move the claw based on joystick direction
+            clawX += distance * Math.cos(angle) * 0.1;
+            clawX = Math.max(0, Math.min(canvas.width - clawWidth, clawX));
+        }
+
+        function endDrag() {
+            isDragging = false;
+            stick.style.transform = 'translate(0px, 0px)';
+            document.removeEventListener("mousemove", onDrag);
+            document.removeEventListener("touchmove", onDrag);
+            document.removeEventListener("mouseup", endDrag);
+            document.removeEventListener("touchend", endDrag);
+        }
+
+        dropButton.addEventListener("click", () => {
+            if (!isClawMovingDown && !isReturning && !isAscending) {
+                isClawMovingDown = true;
+                isDropping = true;
+                confirmButton.style.display = 'none';
+                canDoubleGrab = false; // 每次下爪都禁用二收功能
+                doubleGrabCount = 0; // 重置二收計數器
+            }
+        });
+
+        confirmButton.addEventListener("click", () => {
+            if (heldToy) {
+                // 按下確認按鈕後物品不會消失
+                heldToy = null;
+                isHoldingToy = false;
+                isReturning = true;
+            }
+        });
+
+        function showPasswordPrompt() {
+            passwordPrompt.style.display = 'block';
+        }
+
+        function handlePasswordSubmit() {
+            const password = passwordInput.value;
+            if (password === '1234') {
+                const newProbability = parseFloat(prompt("輸入新的抓取成功機率（0 到 1 之間）", catchProbability));
+                if (newProbability >= 0 && newProbability <= 1) {
+                    catchProbability = newProbability;
+                    alert(`抓取成功機率已設為 ${catchProbability}`);
+                } else {
+                    alert("無效的機率值！");
+                }
+            } else {
+                alert("密碼錯誤！");
+            }
+            passwordPrompt.style.display = 'none';
+            passwordInput.value = '';
+        }
+
+        passwordSubmit.addEventListener("click", handlePasswordSubmit);
+
+        // 初始化爪子位置在最左邊洞口上方
+        clawX = 0;
+        clawY = 0;
+
+        gameLoop();
+    </script>
+</body>
+</html>
